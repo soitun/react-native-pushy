@@ -41,13 +41,25 @@ export const PushyProvider = ({
     setLastError(undefined);
   }, []);
 
-  const showAlert = useCallback(
+  const alertUpdate = useCallback(
     (...args: Parameters<typeof Alert.alert>) => {
-      if (options.useAlert) {
+      if (
+        options.updateStrategy === 'alwaysAlert' ||
+        options.updateStrategy === 'alertUpdateAndIgnoreError'
+      ) {
         Alert.alert(...args);
       }
     },
-    [options],
+    [options.updateStrategy],
+  );
+
+  const alertError = useCallback(
+    (...args: Parameters<typeof Alert.alert>) => {
+      if (options.updateStrategy === 'alwaysAlert') {
+        Alert.alert(...args);
+      }
+    },
+    [options.updateStrategy],
   );
 
   const switchVersion = useCallback(() => {
@@ -73,7 +85,12 @@ export const PushyProvider = ({
           return;
         }
         stateListener.current && stateListener.current.remove();
-        showAlert('提示', '下载完毕，是否立即更新?', [
+        if (options.updateStrategy === 'silentAndNow') {
+          return client.switchVersion(hash);
+        } else if (options.updateStrategy === 'silentAndLater') {
+          return client.switchVersionLater(hash);
+        }
+        alertUpdate('提示', '下载完毕，是否立即更新?', [
           {
             text: '下次再说',
             style: 'cancel',
@@ -91,10 +108,10 @@ export const PushyProvider = ({
         ]);
       } catch (e: any) {
         setLastError(e);
-        showAlert('更新失败', e.message);
+        alertError('更新失败', e.message);
       }
     },
-    [client, showAlert],
+    [alertError, client, options.updateStrategy, alertUpdate],
   );
 
   const downloadAndInstallApk = useCallback(
@@ -117,7 +134,7 @@ export const PushyProvider = ({
       info = await client.checkUpdate();
     } catch (e: any) {
       setLastError(e);
-      showAlert('更新检查失败', e.message);
+      alertError('更新检查失败', e.message);
       return;
     }
     if (!info) {
@@ -128,7 +145,15 @@ export const PushyProvider = ({
     if (info.expired) {
       const { downloadUrl } = info;
       if (downloadUrl) {
-        showAlert('提示', '您的应用版本已更新，点击更新下载安装新版本', [
+        if (options.updateStrategy === 'silentAndNow') {
+          if (Platform.OS === 'android' && downloadUrl.endsWith('.apk')) {
+            downloadAndInstallApk(downloadUrl);
+          } else {
+            Linking.openURL(downloadUrl);
+          }
+          return;
+        }
+        alertUpdate('提示', '您的应用版本已更新，点击更新下载安装新版本', [
           {
             text: '更新',
             onPress: () => {
@@ -142,7 +167,13 @@ export const PushyProvider = ({
         ]);
       }
     } else if (info.update) {
-      showAlert(
+      if (
+        options.updateStrategy === 'silentAndNow' ||
+        options.updateStrategy === 'silentAndLater'
+      ) {
+        return downloadUpdate(info);
+      }
+      alertUpdate(
         '提示',
         '检查到新的版本' + info.name + ',是否下载?\n' + info.description,
         [
@@ -157,7 +188,14 @@ export const PushyProvider = ({
         ],
       );
     }
-  }, [client, downloadAndInstallApk, downloadUpdate, showAlert]);
+  }, [
+    alertError,
+    client,
+    downloadAndInstallApk,
+    downloadUpdate,
+    options.updateStrategy,
+    alertUpdate,
+  ]);
 
   const markSuccess = client.markSuccess;
 
@@ -168,11 +206,11 @@ export const PushyProvider = ({
       );
       return;
     }
-    const { strategy, dismissErrorAfter, autoMarkSuccess } = options;
+    const { checkStrategy, dismissErrorAfter, autoMarkSuccess } = options;
     if (isFirstTime && autoMarkSuccess) {
       markSuccess();
     }
-    if (strategy === 'both' || strategy === 'onAppResume') {
+    if (checkStrategy === 'both' || checkStrategy === 'onAppResume') {
       stateListener.current = AppState.addEventListener(
         'change',
         nextAppState => {
@@ -182,7 +220,7 @@ export const PushyProvider = ({
         },
       );
     }
-    if (strategy === 'both' || strategy === 'onAppStart') {
+    if (checkStrategy === 'both' || checkStrategy === 'onAppStart') {
       checkUpdate();
     }
     let dismissErrorTimer: ReturnType<typeof setTimeout>;
